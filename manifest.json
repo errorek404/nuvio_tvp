@@ -1,1 +1,20 @@
-
+{
+  "id": "custom-tvpvod-repo",
+  "name": "Moje Wtyczki PL",
+  "version": "1.0.0",
+  "scrapers": [
+    {
+      "id": "nuvio-tvpvod",
+      "name": "TVP VOD",
+      "description": "Polskie filmy i seriale z serwisu TVP VOD (HLS + Widevine DRM)",
+      "version": "1.0.0",
+      "author": "Custom",
+      "supportedTypes": ["movie", "tv"],
+      "filename": "providers/tvpvod.js",
+      "enabled": true,
+      "formats": ["m3u8", "mpd"],
+      "logo": "https://tvp.pl",
+      "contentLanguage": ["pl"]
+    }
+  ]
+}
