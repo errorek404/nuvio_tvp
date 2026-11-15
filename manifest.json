@@ -1,20 +1,20 @@
 {
-  "id": "custom-tvpvod-repo",
   "name": "Moje Wtyczki PL",
   "version": "1.0.0",
+  "description": "Polskie providery dla Nuvio",
+  "author": "Custom",
   "scrapers": [
     {
       "id": "nuvio-tvpvod",
       "name": "TVP VOD",
       "description": "Polskie filmy i seriale z serwisu TVP VOD (HLS + Widevine DRM)",
       "version": "1.0.0",
-      "author": "Custom",
-      "supportedTypes": ["movie", "tv"],
       "filename": "providers/tvpvod.js",
-      "enabled": true,
-      "formats": ["m3u8", "mpd"],
-      "logo": "https://tvp.pl",
-      "contentLanguage": ["pl"]
+      "supportedTypes": ["movie", "tv"],
+      "contentLanguage": ["pl"],
+      "logo": "https://upload.wikimedia.org/wikipedia/commons/thumb/8/8a/TVP_VOD_logo.svg/512px-TVP_VOD_logo.svg.png",
+      "formats": ["m3u8"],
+      "manifestEnabled": true
     }
   ]
 }
