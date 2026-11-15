@@ -8,6 +8,7 @@ const REFERER = 'https://tvp.pl';
 const DEFAULT_HEADERS = {
   'User-Agent': USER_AGENT,
   'Referer': REFERER,
+  'Origin': 'https://tvp.pl',
   'Accept': 'application/json',
 };
 
@@ -43,10 +44,11 @@ function findEpisodeProductId(serialId, seasonNum, episodeNum) {
     .then(res => res.json())
     .then(seasonsData => {
       const seasons = Array.isArray(seasonsData) ? seasonsData : (seasonsData.items || []);
-      const targetSeason = seasons.find(s => Number(s.seasonNumber || s.number) === Number(seasonNum)) || seasons[0];
-      if (!targetSeason) throw new Error('Nie znaleziono sezonu w TVP VOD');
+      if (!seasons.length) throw new Error('Brak sezonów w API TVP');
 
+      const targetSeason = seasons.find(s => Number(s.seasonNumber || s.number) === Number(seasonNum)) || seasons[0];
       const seasonId = targetSeason.id || targetSeason._id;
+
       const episodesUrl = `${TVP_API_BASE}/${serialId}/seasons/${seasonId}/episodes?lang=pl&platform=BROWSER`;
       return fetch(episodesUrl, { headers: DEFAULT_HEADERS });
     })
@@ -71,8 +73,8 @@ function fetchStreamData(productId) {
       const dashSources = data.sources && data.sources.DASH;
       const hlsSources = data.sources && data.sources.HLS;
 
-      // 1. Strumień chroniony DRM (preferowany DASH + Widevine)
-      if (hasWidevine && dashSources && dashSources.length > 0 && dashSources[0].src) {
+      // 1. Strumień chroniony DRM (DASH + Widevine)
+      if (hasWidevine && Array.isArray(dashSources) && dashSources.length > 0 && dashSources[0].src) {
         return {
           url: dashSources[0].src,
           quality: '1080p (DRM)',
@@ -88,7 +90,7 @@ function fetchStreamData(productId) {
       }
 
       // 2. Strumień otwarty bez DRM (HLS)
-      if (hlsSources && hlsSources.length > 0 && hlsSources[0].src) {
+      if (Array.isArray(hlsSources) && hlsSources.length > 0 && hlsSources[0].src) {
         return {
           url: hlsSources[0].src,
           quality: 'Auto (HLS)',
@@ -96,7 +98,16 @@ function fetchStreamData(productId) {
         };
       }
 
-      throw new Error('Brak dostępnego źródła wideo (możliwa blokada regionalna lub wymóg logowania)');
+      // 3. Zapasowo DASH bez DRM, jeśli HLS jest pusty
+      if (Array.isArray(dashSources) && dashSources.length > 0 && dashSources[0].src) {
+        return {
+          url: dashSources[0].src,
+          quality: 'Auto (DASH)',
+          drm: null,
+        };
+      }
+
+      throw new Error('Brak dostępnego źródła wideo w odpowiedzi playlisty');
     });
 }
 
@@ -113,7 +124,8 @@ async function getStreams(tmdbId, mediaType, season, episode) {
       throw new Error(`Nie znaleziono "${title}" w TVP VOD`);
     }
 
-    const exactMatch = items.find(i => (i.title || '').toLowerCase() === title.toLowerCase()) || items[0];
+    // Szukamy dokładnego dopasowania tytułu lub bierzemy pierwszy wynik z tablicy [0]
+    const exactMatch = items.find(i => (i.title || '').toLowerCase().trim() === title.toLowerCase().trim()) || items[0];
     let productId = exactMatch.id || exactMatch._id;
 
     if (mediaType === 'tv' && season && episode) {
@@ -150,4 +162,3 @@ async function getStreams(tmdbId, mediaType, season, episode) {
 }
 
 module.exports = { getStreams };
-
