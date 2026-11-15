@@ -1,5 +1,5 @@
 // providers/tvpvod.js
-const TMDB_API_KEY = 'TWOJ_KLUCZ_TMDB'; // <-- Wklej swój klucz API v3 z TMDB
+const TMDB_API_KEY = 'cd5cd2b85b5aca5cdf2208bcbdfb2dbf'; // <-- Wklej swój klucz API v3 z TMDB
 
 const TVP_API_BASE = 'https://tvp.pl';
 const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
