@@ -1,7 +1,7 @@
 // providers/tvpvod.js
-// Provider Nuvio dla TVP VOD — wersja kompletna i dostosowana do Nuvio TV
+// Provider Nuvio dla TVP VOD — wersja poprawiona na bazie Guliwer777/tv-player
 
-const TMDB_API_KEY = 'cd5cd2b85b5aca5cdf2208bcbdfb2dbf'; // <-- Wymagane! Wygeneruj na themoviedb.org
+const TMDB_API_KEY = 'TWOJ_KLUCZ_TMDB'; // <-- Wymagane! Wygeneruj na themoviedb.org
 
 // Opcjonalne dane logowania (dla treści premium / profilu).
 // UWAGA: NIE umieszczaj tych danych w publicznym repozytorium GitHub!
@@ -93,7 +93,7 @@ function searchRank(item, keyword) {
 }
 
 function searchKind(keyword, kind) {
-  return api(`products/vods/search/${kind}`, { keyword })
+  return api(`products/vods/search/${kind}`, { keyword, firstResult: 0, maxResults: 50 })
     .then(data => {
       if (!data || !Array.isArray(data.items)) return [];
       return data.items.filter(it =>
@@ -103,23 +103,39 @@ function searchKind(keyword, kind) {
     });
 }
 
-// ─── Hierarchia serialu (z fallbackiem ścieżki API) ──────────────────
+// ─── Hierarchia serialu (poprawione ścieżki z catalog.py) ────────────
 
 function getSeasons(serialId) {
-  return api(`products/vods/serials/${serialId}/seasons`)
-    .catch(() => api(`products/serials/${serialId}/seasons`))
+  return api(`products/${serialId}/seasons`)
+    .catch(() => api(`products/vods/serials/${serialId}/seasons`))
     .then(d => Array.isArray(d) ? d : (d.items || []));
 }
 
 function getEpisodes(serialId, seasonId) {
-  return api(`products/vods/serials/${serialId}/seasons/${seasonId}/episodes`)
-    .catch(() => api(`products/serials/${serialId}/seasons/${seasonId}/episodes`))
+  return api(`products/${serialId}/seasons/${seasonId}/episodes`, { firstResult: 0, maxResults: 500 })
+    .catch(() => api(`products/vods/serials/${serialId}/seasons/${seasonId}/episodes`, { firstResult: 0, maxResults: 500 }))
     .then(d => Array.isArray(d) ? d : (d.items || []));
 }
 
 function getDetail(productId) {
-  return api(`products/vods/${productId}`)
-    .catch(() => api(`products/${productId}`));
+  return api(`products/${productId}`)
+    .catch(() => api(`products/vods/${productId}`));
+}
+
+function extractNumber(obj, keys) {
+  if (!obj) return NaN;
+  for (const k of keys) {
+    if (obj[k] !== undefined && obj[k] !== null && obj[k] !== '') {
+      const n = Number(obj[k]);
+      if (!isNaN(n)) return n;
+    }
+  }
+  return NaN;
+}
+
+function extractEpisodeFromTitle(title) {
+  const m = String(title || '').match(/(?:odc\.?|odcinek|ep\.?|e)\s*0*(\d+)/i);
+  return m ? Number(m[1]) : NaN;
 }
 
 // ─── Playlista – poprawny endpoint z videoType ──────────────────────
@@ -139,6 +155,7 @@ function normalizePlaylistPayload(payload) {
     throw new Error(`TVP nie udostępniło materiału: ${payload.code}`);
   }
 
+  // DRM: płaski format pod ExoPlayer w Nuvio TV
   let drm = null;
   let hasWidevine = false;
 
@@ -146,7 +163,6 @@ function normalizePlaylistPayload(payload) {
     const ls = payload.licenseServers || {};
     const wv = ls['com.widevine.alpha'] || (payload.drm.WIDEVINE && payload.drm.WIDEVINE.src);
     const licenseUrl = typeof wv === 'string' ? wv : (wv && (wv.src || wv.url));
-
     if (licenseUrl) {
       hasWidevine = true;
       drm = {
@@ -162,6 +178,7 @@ function normalizePlaylistPayload(payload) {
     }
   }
 
+  // Przy DRM Widevine wybieramy DASH przed HLS (HLS to często FairPlay dla Apple)
   const protocols = hasWidevine ? ['DASH', 'HLS'] : ['HLS', 'DASH'];
   const sources = (payload && payload.sources) || {};
 
@@ -255,13 +272,25 @@ function resolveEpisode(tmdb, season, episode) {
 }
 
 function findEpisodeInSerial(serialId, season, episode) {
+  const targetS = Number(season);
+  const targetE = Number(episode);
+
   return getSeasons(serialId).then(seasons => {
-    const s = seasons.find(x => Number(x.number || x.seasonNumber) === Number(season))
-           || (Number(season) === 1 && seasons.length === 1 ? seasons[0] : null);
+    if (!seasons.length) throw new Error('Pusta lista sezonów.');
+    let s = seasons.find(x => extractNumber(x, ['number', 'seasonNumber', 'season']) === targetS);
+    if (!s && targetS === 1 && seasons.length === 1) {
+      s = seasons[0];
+    }
     if (!s) throw new Error(`Brak sezonu ${season}.`);
     return getEpisodes(serialId, s.id);
   }).then(eps => {
-    const e = eps.find(x => Number(x.number || x.episodeNumber) === Number(episode));
+    if (!eps.length) throw new Error('Pusta lista odcinków.');
+    const e = eps.find(x => {
+      const epNum = extractNumber(x, ['number', 'episodeNumber', 'episode']);
+      if (!isNaN(epNum) && epNum === targetE) return true;
+      const titleNum = extractEpisodeFromTitle(x.title);
+      return !isNaN(titleNum) && titleNum === targetE;
+    });
     if (!e) throw new Error(`Brak odcinka ${episode}.`);
     return e;
   });
@@ -272,6 +301,7 @@ function resolveEpisodeBySearch(tmdb, season, episode) {
   const sq = `S${pad(season)}E${pad(episode)}`;
   const queries = [
     `${tmdb.title} ${sq}`,
+    `${tmdb.title} odc. ${episode}`,
     `${tmdb.title} odcinek ${episode}`,
     tmdb.title,
     tmdb.original,
@@ -282,7 +312,7 @@ function resolveEpisodeBySearch(tmdb, season, episode) {
       return Promise.reject(new Error(`Nie znaleziono odcinka ${season}x${episode}.`));
     }
     return searchKind(queries[qi], 'EPISODE')
-      .then(items => verifyCandidates(items.slice(0, 5), season, episode))
+      .then(items => verifyCandidates(items.slice(0, 10), season, episode))
       .then(found => {
         if (found) return { productId: found.id, item: found };
         return tryQuery(qi + 1);
@@ -292,18 +322,18 @@ function resolveEpisodeBySearch(tmdb, season, episode) {
 }
 
 function verifyCandidates(items, season, episode) {
+  const targetS = Number(season);
+  const targetE = Number(episode);
+
   function checkOne(i) {
     if (i >= items.length) return Promise.resolve(null);
     const item = items[i];
     return getDetail(item.id)
       .then(detail => {
         const dSeason = detail.season || {};
-        const sNum = dSeason.number || dSeason.seasonNumber || detail.seasonNumber;
-        const eNum = detail.number || detail.episodeNumber;
-        if (
-          Number(sNum) === Number(season) &&
-          Number(eNum) === Number(episode)
-        ) {
+        const sNum = extractNumber(dSeason, ['number', 'seasonNumber']) || extractNumber(detail, ['seasonNumber', 'season']);
+        const eNum = extractNumber(detail, ['number', 'episodeNumber', 'episode']) || extractEpisodeFromTitle(detail.title);
+        if (sNum === targetS && eNum === targetE) {
           return item;
         }
         return checkOne(i + 1);
@@ -332,9 +362,8 @@ function getStreams(tmdbId, mediaType, season, episode) {
     .then(({ url, drm, protocol, item }) => {
       const flags = [];
       if (item.payable) flags.push('płatne');
-      if (drm) flags.push(drm.required ? 'DRM (brak serwera licencji)' : 'DRM');
+      if (drm) flags.push(drm.licenseUrl ? 'DRM' : 'DRM (brak serwera licencji)');
       const suffix = flags.length ? ` [${flags.join(', ')}]` : '';
-
       const stream = {
         name: 'TVP VOD',
         title: `${item.title}${suffix}`,
@@ -342,7 +371,6 @@ function getStreams(tmdbId, mediaType, season, episode) {
         quality: protocol === 'DASH' ? '1080p' : 'auto',
         headers: buildHeaders(url),
       };
-
       if (drm && drm.licenseUrl) {
         stream.drm = {
           type: drm.type,
@@ -350,7 +378,6 @@ function getStreams(tmdbId, mediaType, season, episode) {
           headers: drm.headers,
         };
       }
-
       console.log(`[TVP VOD] Strumień: ${url}${suffix}`);
       return [stream];
     })
