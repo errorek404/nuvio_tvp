@@ -1,13 +1,10 @@
 // providers/tvpvod.js
-// Provider Nuvio dla TVP VOD — wersja finalna
-// Endpoint playlisty potwierdzony w player.py: /api/products/{id}/videos/playlist?videoType=MOVIE
+// Provider Nuvio dla TVP VOD — wersja kompletna i dostosowana do Nuvio TV
 
-const TMDB_API_KEY = 'cd5cd2b85b5aca5cdf2208bcbdfb2dbf'; // <-- Wymagane! Wygeneruj na themoviedb.org
+const TMDB_API_KEY = 'TWOJ_KLUCZ_TMDB'; // <-- Wymagane! Wygeneruj na themoviedb.org
 
 // Opcjonalne dane logowania (dla treści premium / profilu).
-// Uzyskaj przez lokalny skrypt Python (pairing + odszyfrowanie DPAPI)
-// albo DevTools przeglądarki (F12 → Network → żądanie do vod.tvp.pl/api/...).
-// NIE umieszczaj tych danych w publicznym repozytorium.
+// UWAGA: NIE umieszczaj tych danych w publicznym repozytorium GitHub!
 const TVP_AUTH = {
   token: '',
   profile: '',
@@ -15,7 +12,7 @@ const TVP_AUTH = {
 };
 
 const TVP_BASE = 'https://vod.tvp.pl/api';
-const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 const REFERER = 'https://vod.tvp.pl/';
 
 // ─── Warstwa HTTP z wstrzykiwaniem auth ─────────────────────────────
@@ -24,6 +21,7 @@ function buildHeaders(url) {
   const h = {
     'User-Agent': UA,
     'Referer': REFERER,
+    'Origin': 'https://vod.tvp.pl',
     'Accept': 'application/json',
   };
   if (/^https:\/\/(?:vod|api)\.tvp\.pl(?::443)?\//.test(url)) {
@@ -105,26 +103,28 @@ function searchKind(keyword, kind) {
     });
 }
 
-// ─── Hierarchia serialu ──────────────────────────────────────────────
+// ─── Hierarchia serialu (z fallbackiem ścieżki API) ──────────────────
 
 function getSeasons(serialId) {
   return api(`products/vods/serials/${serialId}/seasons`)
+    .catch(() => api(`products/serials/${serialId}/seasons`))
     .then(d => Array.isArray(d) ? d : (d.items || []));
 }
 
 function getEpisodes(serialId, seasonId) {
   return api(`products/vods/serials/${serialId}/seasons/${seasonId}/episodes`)
+    .catch(() => api(`products/serials/${serialId}/seasons/${seasonId}/episodes`))
     .then(d => Array.isArray(d) ? d : (d.items || []));
 }
 
 function getDetail(productId) {
-  return api(`products/vods/${productId}`);
+  return api(`products/vods/${productId}`)
+    .catch(() => api(`products/${productId}`));
 }
 
 // ─── Playlista – poprawny endpoint z videoType ──────────────────────
 
 function getPlaylist(productId) {
-  // videoType=MOVIE jest obowiązkowe dla VOD (potwierdzone w player.py)
   const url = `${TVP_BASE}/products/${productId}/videos/playlist`
             + `?lang=pl&platform=BROWSER&videoType=MOVIE`;
 
@@ -132,7 +132,6 @@ function getPlaylist(productId) {
 }
 
 function normalizePlaylistPayload(payload) {
-  // 1. Kody błędów z API
   if (payload && payload.code) {
     if (payload.code === 'ITEM_NOT_PAID') {
       throw new Error('Materiał wymaga wykupionego dostępu do TVP VOD.');
@@ -140,21 +139,33 @@ function normalizePlaylistPayload(payload) {
     throw new Error(`TVP nie udostępniło materiału: ${payload.code}`);
   }
 
-  // 2. DRM
   let drm = null;
+  let hasWidevine = false;
+
   if (payload && payload.drm) {
-    const servers = {};
     const ls = payload.licenseServers || {};
-    ['com.widevine.alpha', 'com.microsoft.playready'].forEach(key => {
-      const v = ls[key];
-      if (v) servers[key] = typeof v === 'string' ? v : (v.src || v.url);
-    });
-    drm = Object.keys(servers).length ? { servers } : { required: true };
+    const wv = ls['com.widevine.alpha'] || (payload.drm.WIDEVINE && payload.drm.WIDEVINE.src);
+    const licenseUrl = typeof wv === 'string' ? wv : (wv && (wv.src || wv.url));
+
+    if (licenseUrl) {
+      hasWidevine = true;
+      drm = {
+        type: 'widevine',
+        licenseUrl: licenseUrl,
+        headers: {
+          'User-Agent': UA,
+          'Referer': REFERER,
+        },
+      };
+    } else {
+      drm = { required: true };
+    }
   }
 
-  // 3. URL ze źródeł (HLS najpierw, potem DASH)
+  const protocols = hasWidevine ? ['DASH', 'HLS'] : ['HLS', 'DASH'];
   const sources = (payload && payload.sources) || {};
-  for (const protocol of ['HLS', 'DASH']) {
+
+  for (const protocol of protocols) {
     const list = sources[protocol] || [];
     for (const item of list) {
       const src = item && item.src;
@@ -166,13 +177,16 @@ function normalizePlaylistPayload(payload) {
   throw new Error('TVP nie zwróciło obsługiwanego strumienia.');
 }
 
-// ─── Fallback: stary tokenizer (gdyby TVP usunęło endpoint playlisty) ─
+// ─── Fallback: stary tokenizer ───────────────────────────────────────
 
 function getPlaylistWithFallback(productId) {
   return getPlaylist(productId).catch(err => {
     console.warn(`[TVP VOD] Nowy endpoint zawiódł (${err.message}), próba tokenizera.`);
     return tvpJson(`https://api.tvp.pl/tokenizer/token/${productId}`)
       .then(payload => {
+        if (payload && (payload.isGeoBlocked || payload.geoBlocked)) {
+          throw new Error('Blokada regionalna GEOIP.');
+        }
         const formats = (payload && payload.formats) || [];
         const hls = formats.filter(f => /mpegurl|m3u8/i.test(f.mimeType || ''));
         if (!hls.length) throw new Error('Brak HLS w tokenizerze.');
@@ -242,11 +256,12 @@ function resolveEpisode(tmdb, season, episode) {
 
 function findEpisodeInSerial(serialId, season, episode) {
   return getSeasons(serialId).then(seasons => {
-    const s = seasons.find(x => Number(x.number) === Number(season));
+    const s = seasons.find(x => Number(x.number || x.seasonNumber) === Number(season))
+           || (Number(season) === 1 && seasons.length === 1 ? seasons[0] : null);
     if (!s) throw new Error(`Brak sezonu ${season}.`);
     return getEpisodes(serialId, s.id);
   }).then(eps => {
-    const e = eps.find(x => Number(x.number) === Number(episode));
+    const e = eps.find(x => Number(x.number || x.episodeNumber) === Number(episode));
     if (!e) throw new Error(`Brak odcinka ${episode}.`);
     return e;
   });
@@ -283,9 +298,11 @@ function verifyCandidates(items, season, episode) {
     return getDetail(item.id)
       .then(detail => {
         const dSeason = detail.season || {};
+        const sNum = dSeason.number || dSeason.seasonNumber || detail.seasonNumber;
+        const eNum = detail.number || detail.episodeNumber;
         if (
-          Number(dSeason.number) === Number(season) &&
-          Number(detail.number) === Number(episode)
+          Number(sNum) === Number(season) &&
+          Number(eNum) === Number(episode)
         ) {
           return item;
         }
@@ -317,14 +334,23 @@ function getStreams(tmdbId, mediaType, season, episode) {
       if (item.payable) flags.push('płatne');
       if (drm) flags.push(drm.required ? 'DRM (brak serwera licencji)' : 'DRM');
       const suffix = flags.length ? ` [${flags.join(', ')}]` : '';
+
       const stream = {
         name: 'TVP VOD',
         title: `${item.title}${suffix}`,
         url,
-        quality: protocol === 'DASH' ? 'DASH' : 'auto',
+        quality: protocol === 'DASH' ? '1080p' : 'auto',
         headers: buildHeaders(url),
       };
-      if (drm && drm.servers) stream.drm = { servers: drm.servers };
+
+      if (drm && drm.licenseUrl) {
+        stream.drm = {
+          type: drm.type,
+          licenseUrl: drm.licenseUrl,
+          headers: drm.headers,
+        };
+      }
+
       console.log(`[TVP VOD] Strumień: ${url}${suffix}`);
       return [stream];
     })

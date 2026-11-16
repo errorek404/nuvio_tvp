@@ -1,18 +1,16 @@
 // providers/tvpsport.js
-// Provider Nuvio dla TVP Sport — harmonogram transmisji na żywo i nadchodzących.
-// Oparty na logice z sport_api.py (Python) dostarczonego przez użytkownika.
+// Provider Nuvio dla TVP Sport — harmonogram transmisji na żywo i nadchodzących
 
 const SPORT_BASE = 'https://sport.tvp.pl';
-const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 const REFERER = 'https://sport.tvp.pl/';
-
-// ─── Warstwa HTTP ────────────────────────────────────────────────────
 
 function sportFetch(url, options) {
   const opts = options || {};
   opts.headers = Object.assign({
     'User-Agent': UA,
     'Referer': REFERER,
+    'Origin': 'https://sport.tvp.pl',
     'Accept': 'text/html,application/json,*/*',
   }, opts.headers || {});
   return fetch(url, opts);
@@ -25,8 +23,6 @@ function sportJson(url) {
   });
 }
 
-// ─── Pobieranie i parsowanie harmonogramu ────────────────────────────
-
 function fetchSchedule() {
   return sportFetch(`${SPORT_BASE}/transmisje`).then(res => {
     if (!res.ok) throw new Error(`HTTP ${res.status} dla harmonogramu TVP Sport.`);
@@ -36,21 +32,22 @@ function fetchSchedule() {
     const idx = html.indexOf(marker);
     if (idx === -1) throw new Error('Nie znaleziono danych harmonogramu TVP Sport.');
 
-    // Znajdź początek JSON-a po znaku '='
     const eqIdx = html.indexOf('=', idx + marker.length);
-    if (eqIdx === -1) throw new Error('Nie znaleziono przypisania danych harmonogramu.');
+    const scriptEndIdx = html.indexOf('</script>', eqIdx);
+    if (eqIdx === -1 || scriptEndIdx === -1) {
+      throw new Error('Nie znaleziono granic obiektu harmonogramu.');
+    }
 
-    // JSON kończy się średnikiem – wyciągamy fragment
-    const start = eqIdx + 1;
-    const end = html.indexOf(';', start);
-    if (end === -1) throw new Error('Nie znaleziono końca danych harmonogramu.');
+    let jsonText = html.substring(eqIdx + 1, scriptEndIdx).trim();
+    if (jsonText.endsWith(';')) {
+      jsonText = jsonText.slice(0, -1).trim();
+    }
 
-    const jsonText = html.substring(start, end).trim();
     let payload;
     try {
       payload = JSON.parse(jsonText);
     } catch (e) {
-      throw new Error('Nie udało się sparsować JSON-a harmonogramu TVP Sport.');
+      throw new Error('Błąd parsowania JSON-a harmonogramu TVP Sport.');
     }
     return parseSchedule(payload);
   });
@@ -74,11 +71,11 @@ function parseSchedule(payload) {
 
       const start = startRaw / 1000;
       const end = endRaw / 1000;
-      if (end <= now) continue; // pomijamy zakończone
+      if (end <= now) continue;
 
       const isLive = Boolean(item.is_live) || (start <= now && now < end);
+      if (!isLive && (start - now) > 900) continue;
 
-      // Tytuł: preferuj tytuł transmisji, potem tytuł wideo
       const title = String(item.title || (item.video && item.video.title) || 'Transmisja');
 
       results.push({
@@ -92,7 +89,6 @@ function parseSchedule(payload) {
     }
   }
 
-  // Sortowanie: najpierw aktywne, potem według czasu rozpoczęcia
   results.sort((a, b) => {
     if (a.isLive !== b.isLive) return a.isLive ? -1 : 1;
     return a.start - b.start;
@@ -101,124 +97,80 @@ function parseSchedule(payload) {
   return results;
 }
 
-// ─── Pobieranie playlisty (HLS/DASH) i DRM ───────────────────────────
-
 function fetchPlaylist(id) {
   return sportJson(`https://api.tvp.pl/tokenizer/token/${id}`).then(payload => {
-    // GEOIP
     if (payload.isGeoBlocked || payload.geoBlocked) {
-      throw new Error('TVP Sport nie udostępnia tej transmisji w Twojej lokalizacji (GEOIP).');
+      throw new Error('GEOIP block');
     }
 
     const formats = payload.formats || [];
     const hls = formats.filter(f => /mpegurl|m3u8/i.test(f.mimeType || ''));
     const dash = formats.filter(f => /dash\+xml/i.test(f.mimeType || ''));
 
-    // Preferuj HLS, chyba że jest DRM i tylko DASH jest dostępny
-    let choices;
-    if (payload.drm) {
-      choices = dash.length ? dash : hls;
-    } else {
-      choices = hls.length ? hls : dash;
-    }
-
+    let choices = payload.drm ? (dash.length ? dash : hls) : (hls.length ? hls : dash);
     if (!choices.length) {
-      throw new Error('Brak dostępnego strumienia. Transmisja mogła się zakończyć lub wymaga zalogowania.');
+      throw new Error('Brak aktywnego strumienia');
     }
 
-    // Wybierz najlepszą jakość
-    const best = choices.reduce((a, b) => {
-      const aBr = a.totalBitrate || 0;
-      const bBr = b.totalBitrate || 0;
-      return bBr > aBr ? b : a;
-    });
-
+    const best = choices.reduce((a, b) => ((b.totalBitrate || 0) > (a.totalBitrate || 0) ? b : a));
     const url = best.url;
     if (!url || !/^https:\/\//.test(url)) {
-      throw new Error('Niepoprawny adres manifestu strumienia.');
+      throw new Error('Niepoprawny URL strumienia');
     }
 
-    // DRM
     let drm = null;
-    if (payload.drm) {
-      const servers = {};
-      const ls = payload.licenseServers || {};
-      ['com.widevine.alpha', 'com.microsoft.playready'].forEach(key => {
-        const v = ls[key];
-        if (v) servers[key] = typeof v === 'string' ? v : (v.src || v.url);
-      });
-      if (Object.keys(servers).length) {
-        drm = { servers };
-      } else {
-        drm = { required: true };
+    if (payload.drm && payload.licenseServers) {
+      const ls = payload.licenseServers;
+      const wv = ls['com.widevine.alpha'];
+      const licenseUrl = typeof wv === 'string' ? wv : (wv && (wv.src || wv.url));
+      if (licenseUrl) {
+        drm = {
+          type: 'widevine',
+          licenseUrl: licenseUrl,
+          headers: {
+            'User-Agent': UA,
+            'Referer': REFERER,
+          },
+        };
       }
     }
 
-    const protocol = dash.length && payload.drm ? 'DASH' : 'HLS';
-    return { url, drm, protocol, isLive: Boolean(payload.live) };
+    const protocol = (dash.length && payload.drm) ? 'DASH' : 'HLS';
+    return { url, drm, protocol };
   });
 }
 
-// ─── Główna funkcja providera ────────────────────────────────────────
-
 function getStreams(tmdbId, mediaType, season, episode) {
-  // tmdbId jest ignorowane – provider zawsze zwraca harmonogram TVP Sport.
-  // Można opcjonalnie użyć tmdbId jako filtru dyscypliny, np. tmdbId = "tenis".
-  const filter = (typeof tmdbId === 'string' && tmdbId !== 'tvp-sport') ? tmdbId.toLowerCase() : null;
-
-  console.log(`[TVP Sport] Pobieram harmonogram... (filtr: ${filter || 'brak'})`);
+  console.log('[TVP Sport] Pobieram aktywne transmisje...');
 
   return fetchSchedule()
     .then(events => {
-      if (!events.length) {
-        console.log('[TVP Sport] Brak nadchodzących lub trwających transmisji.');
-        return [];
-      }
+      if (!events.length) return [];
 
-      // Filtrowanie po dyscyplinie, jeśli podano
-      let filtered = events;
-      if (filter) {
-        filtered = events.filter(e => e.discipline.toLowerCase().includes(filter));
-        if (!filtered.length) {
-          console.log(`[TVP Sport] Brak transmisji dla dyscypliny "${filter}".`);
-          return [];
-        }
-      }
-
-      // Ogranicz do np. 15 transmisji, aby nie przeciążać
-      const limited = filtered.slice(0, 15);
-
-      // Dla każdej transmisji pobierz playlistę
+      const limited = events.slice(0, 10);
       const promises = limited.map(event => {
         return fetchPlaylist(event.id)
           .then(play => {
-            const flags = [];
-            if (event.isLive) flags.push('NA ŻYWO');
-            if (play.drm) flags.push(play.drm.required ? 'DRM' : 'DRM');
-            const suffix = flags.length ? ` [${flags.join(', ')}]` : '';
-
+            const badge = event.isLive ? ' [NA ŻYWO]' : ' [ZARAZ]';
             const stream = {
               name: 'TVP Sport',
-              title: `${event.discipline}: ${event.title}${suffix}`,
+              title: `${event.discipline}: ${event.title}${badge}`,
               url: play.url,
-              quality: play.protocol === 'DASH' ? 'DASH' : 'auto',
+              quality: play.protocol === 'DASH' ? '1080p (DASH)' : 'Auto (HLS)',
               headers: {
                 'User-Agent': UA,
                 'Referer': REFERER,
               },
             };
-            if (play.drm && play.drm.servers) {
-              stream.drm = { servers: play.drm.servers };
+            if (play.drm) {
+              stream.drm = play.drm;
             }
             return stream;
           })
-          .catch(err => {
-            console.warn(`[TVP Sport] Nie udało się pobrać strumienia dla "${event.title}": ${err.message}`);
-            return null;
-          });
+          .catch(() => null);
       });
 
-      return Promise.all(promises).then(streams => streams.filter(s => s !== null));
+      return Promise.all(promises).then(streams => streams.filter(Boolean));
     })
     .catch(err => {
       console.error(`[TVP Sport] Błąd: ${err.message}`);
