@@ -1,7 +1,7 @@
 // providers/tvpvod.js
 // Provider Nuvio dla TVP VOD — wersja kompletna i dostosowana do Nuvio TV
 
-const TMDB_API_KEY = 'TWOJ_KLUCZ_TMDB'; // <-- Wymagane! Wygeneruj na themoviedb.org
+const TMDB_API_KEY = 'cd5cd2b85b5aca5cdf2208bcbdfb2dbf'; // <-- Wymagane! Wygeneruj na themoviedb.org
 
 // Opcjonalne dane logowania (dla treści premium / profilu).
 // UWAGA: NIE umieszczaj tych danych w publicznym repozytorium GitHub!
