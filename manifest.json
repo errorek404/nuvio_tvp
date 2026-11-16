@@ -15,18 +15,18 @@
       "logo": "https://upload.wikimedia.org/wikipedia/commons/thumb/8/8a/TVP_VOD_logo.svg/512px-TVP_VOD_logo.svg.png",
       "formats": ["m3u8"],
       "manifestEnabled": true
+    },
+    {
+      "id": "nuvio-tvpsport",
+      "name": "TVP Sport",
+      "description": "Transmisje sportowe z TVP Sport (HLS/DASH + DRM)",
+      "version": "1.0.0",
+      "filename": "providers/tvpsport.js",
+      "supportedTypes": ["movie", "tv"],
+      "contentLanguage": ["pl"],
+      "logo": "https://upload.wikimedia.org/wikipedia/commons/thumb/0/0e/TVP_Sport_logo.svg/512px-TVP_Sport_logo.svg.png",
+      "formats": ["m3u8", "mpd"],
+      "manifestEnabled": true
     }
   ]
-}
-{
-  "id": "nuvio-tvpsport",
-  "name": "TVP Sport",
-  "description": "Transmisje sportowe z TVP Sport (HLS/DASH + DRM)",
-  "version": "1.0.0",
-  "filename": "providers/tvpsport.js",
-  "supportedTypes": ["movie", "tv"],
-  "contentLanguage": ["pl"],
-  "logo": "https://upload.wikimedia.org/wikipedia/commons/thumb/0/0e/TVP_Sport_logo.svg/512px-TVP_Sport_logo.svg.png",
-  "formats": ["m3u8", "mpd"],
-  "manifestEnabled": true
 }
