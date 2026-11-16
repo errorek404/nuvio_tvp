@@ -1,32 +1,49 @@
 {
-  "name": "Moje Wtyczki PL",
+  "id": "custom-tvp-pl-repo",
+  "name": "Wtyczki TVP PL",
   "version": "1.0.0",
-  "description": "Polskie providery dla Nuvio",
-  "author": "Custom",
   "scrapers": [
     {
       "id": "nuvio-tvpvod",
       "name": "TVP VOD",
       "description": "Polskie filmy i seriale z serwisu TVP VOD (HLS + Widevine DRM)",
       "version": "1.0.0",
+      "author": "Custom",
+      "supportedTypes": [
+        "movie",
+        "tv"
+      ],
       "filename": "providers/tvpvod.js",
-      "supportedTypes": ["movie", "tv"],
-      "contentLanguage": ["pl"],
-      "logo": "https://upload.wikimedia.org/wikipedia/commons/thumb/8/8a/TVP_VOD_logo.svg/512px-TVP_VOD_logo.svg.png",
-      "formats": ["m3u8"],
-      "manifestEnabled": true
+      "enabled": true,
+      "formats": [
+        "m3u8",
+        "mpd"
+      ],
+      "logo": "https://vod.tvp.pl/favicon.ico",
+      "contentLanguage": [
+        "pl"
+      ]
     },
     {
       "id": "nuvio-tvpsport",
-      "name": "TVP Sport",
-      "description": "Transmisje sportowe z TVP Sport (HLS/DASH + DRM)",
+      "name": "TVP Sport Live",
+      "description": "Transmisje sportowe na żywo z TVP Sport",
       "version": "1.0.0",
+      "author": "Custom",
+      "supportedTypes": [
+        "movie",
+        "tv"
+      ],
       "filename": "providers/tvpsport.js",
-      "supportedTypes": ["movie", "tv"],
-      "contentLanguage": ["pl"],
-      "logo": "https://upload.wikimedia.org/wikipedia/commons/thumb/0/0e/TVP_Sport_logo.svg/512px-TVP_Sport_logo.svg.png",
-      "formats": ["m3u8", "mpd"],
-      "manifestEnabled": true
+      "enabled": true,
+      "formats": [
+        "m3u8",
+        "mpd"
+      ],
+      "logo": "https://sport.tvp.pl/favicon.ico",
+      "contentLanguage": [
+        "pl"
+      ]
     }
   ]
 }
